@@ -69,9 +69,17 @@ const ONLY = process.argv[3] ? process.argv[3].split(',') : null;
   const pct = (k) => `${(k / n * 100).toFixed(0)}%`.padStart(4);
 
   console.log(`=== verdicts across ${n} pairs`);
-  ['LONG', 'SHORT', 'NO TRADE'].forEach((v) => {
-    console.log(`  ${v.padEnd(9)} ${String(cnt((r) => r.verdict === v)).padStart(4)}  ${pct(cnt((r) => r.verdict === v))}`);
+  const verdicts = {};
+  rows.forEach((r) => { verdicts[r.verdict] = (verdicts[r.verdict] || 0) + 1; });
+  /* Dynamic: a hardcoded list silently hides the SETUP tiers, which are the
+   * whole point of the three-tier verdict. */
+  Object.entries(verdicts).sort((a, b) => b[1] - a[1]).forEach(([v, k]) => {
+    console.log(`  ${v.padEnd(13)} ${String(k).padStart(4)}  ${pct(k)}`);
   });
+  const actionable = rows.filter((r) => r.verdict === 'LONG' || r.verdict === 'SHORT').length;
+  const directional = rows.filter((r) => r.verdict !== 'NO TRADE').length;
+  console.log(`  ${'→ actionable'.padEnd(13)} ${String(actionable).padStart(4)}  ${pct(actionable)}   (all gates passed)`);
+  console.log(`  ${'→ directional'.padEnd(13)} ${String(directional).padStart(4)}  ${pct(directional)}   (a side is named at all)`);
 
   console.log('\n=== how many pairs were blocked by each gate (a pair can trip several)');
   const codes = {};
