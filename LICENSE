@@ -19,12 +19,3 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
-
----
-
-Market data accessed by this software is provided by Aster
-(https://www.asterdex.com) and PancakeSwap (https://pancakeswap.finance) under
-their own terms. This project is unaffiliated with, and not endorsed by, either.
-
-This software is a market-data analysis tool. It is not financial advice and it
-places no orders, holds no keys, and moves no funds.
