@@ -32,6 +32,7 @@ const SYMBOLS = process.env.SYMBOLS
 
 const BARS = parseInt(process.argv[2] || '400', 10);
 const WARMUP = parseInt(process.argv[3] || '300', 10);
+const STRICT = process.env.STRICT || null;
 
 /* Exit policies to compare on identical signals. */
 const LADDERS = [
@@ -115,7 +116,7 @@ function pooledStats(tradeSets, opts, barsRefs) {
 
     /* One scan per symbol. Every exit policy is then re-simulated from the same
      * signals, so the comparison is apples-to-apples and costs one pass, not six. */
-    const sc = B.scan(ctx, { bars: BARS, warmup: WARMUP });
+    const sc = B.scan(ctx, { bars: BARS, warmup: WARMUP, strictness: STRICT || undefined });
     if (!sc.ok) { console.log(sc.error); continue; }
     records.push(...sc.records.map(r => ({ ...r, symbol: sym })));
     totalBars += sc.records.length;
@@ -123,7 +124,7 @@ function pooledStats(tradeSets, opts, barsRefs) {
     const first = sc.bars1h[sc.records[0].idx], last = sc.bars1h[sc.bars1h.length - 1];
     totalBh.push((last.c - first.c) / first.c * 100);
 
-    const gated = sc.records.filter(r => r.verdict !== 'NO TRADE' && r.planRaw);
+    const gated = sc.records.filter(r => r.hasTrade && r.planRaw);
     const row = {
       symbol: sym, bars: sc.records.length,
       buyHoldPct: (last.c - first.c) / first.c * 100,
@@ -176,11 +177,13 @@ function pooledStats(tradeSets, opts, barsRefs) {
   const abs = comps.map(Math.abs).sort((a, b) => a - b);
   const P = (arr, q) => arr.length ? arr[Math.min(arr.length - 1, Math.floor(arr.length * q))] : 0;
 
-  const gated = records.filter(r => r.verdict !== 'NO TRADE').length;
+  const gated = records.filter(r => r.hasTrade).length;
+  const setupRows = records.filter(r => r.hasSetup).length;
 
   const out = {
     generatedAt: new Date().toISOString(),
     engineVersion: E.VERSION,
+    strictness: STRICT || E.DEFAULT_STRICTNESS,
       method: {
       symbols: SYMBOLS, barsPerSymbol: BARS, warmup: WARMUP,
       totalBarsEvaluated: totalBars,
@@ -209,7 +212,7 @@ function pooledStats(tradeSets, opts, barsRefs) {
   fs.writeFileSync(path.join(root, 'data/calibration.json'), JSON.stringify(out, null, 2));
 
   console.log('\n=== POOLED, gated strategy (what the app actually emits)');
-  console.log(`bars evaluated: ${totalBars}   gated signals: ${gated} (${out.gatedSignalPct.toFixed(1)}%)`);
+  console.log(`bars evaluated: ${totalBars}   gate-passed signals: ${gated} (${out.gatedSignalPct.toFixed(1)}%)   unfiltered setups: ${setupRows} (${(setupRows / Math.max(1, totalBars) * 100).toFixed(1)}%)`);
   console.log('\nexit policy                     trades  winRate    avgR   totalR     PF   maxDD    t-stat');
   ladderResults.forEach(l => {
     const s = l.stats;

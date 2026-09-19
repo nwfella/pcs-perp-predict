@@ -168,7 +168,7 @@
         idx: i, ts: bars1h[i].t, composite: res.composite, confidence: res.confidence,
         agreement: res.agreement, coverage: res.coverage, verdict: res.verdict,
         tier: res.tier, blockers: res.blockers, plan: planFrom(res, o), atrPct: res.atrPct,
-        planRaw: res.plan
+        planRaw: res.plan, hasTrade: res.hasTrade, hasSetup: res.hasSetup
       });
     }
     return { ok: true, records: records, bars1h: bars1h, opts: o };
@@ -227,7 +227,10 @@
     var trades = [];
     var taken = [];
     s.records.forEach(function (r) {
-      if (r.verdict === 'NO TRADE' || !r.plan) return;
+      /* Only gate-filtered signals are traded. SETUP rows exist so the live UI can
+       * show an unfiltered directional read; testing them here would silently
+       * measure a strategy with no gates at all. */
+      if (!r.hasTrade || !r.plan) return;
       var sim = simulate(bars1h, r.idx + 1, r.plan, o);
       if (sim) { sim.signalAt = r.ts; trades.push(sim); taken.push(r); }
     });

@@ -25,11 +25,13 @@ const root = path.resolve(__dirname, '..');
 const D = require(path.join(root, 'src/data.js'));
 const B = require(path.join(root, 'src/backtest.js'));
 const I = require(path.join(root, 'src/indicators.js'));
+const E = require(path.join(root, 'src/engine.js'));
 
 const FIT = (process.env.FIT || 'BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,XRPUSDT,DOGEUSDT').split(',');
 const TEST = (process.env.TEST || 'LINKUSDT,AVAXUSDT,CAKEUSDT,1000PEPEUSDT,ENAUSDT,SUIUSDT').split(',');
 const BARS = parseInt(process.argv[2] || '400', 10);
 const WARMUP = parseInt(process.argv[3] || '300', 10);
+const STRICT = process.env.STRICT || null;
 
 function summarize(trades) {
   const n = trades.length;
@@ -69,6 +71,7 @@ function summarize(trades) {
   const out = {
     generatedAt: new Date().toISOString(),
     engineVersion: null,
+    strictness: STRICT || E.DEFAULT_STRICTNESS,
     method: {
       bars: BARS, warmup: WARMUP,
       costs: B.DEFAULTS.feePct + '% taker per leg + ' + B.DEFAULTS.slipPct + '% slippage per leg',
@@ -78,7 +81,6 @@ function summarize(trades) {
     sets: {}
   };
 
-  const E = require(path.join(root, 'src/engine.js'));
   out.engineVersion = E.VERSION;
 
   const cached = {};
@@ -97,7 +99,7 @@ function summarize(trades) {
       for (const sym of syms) {
         const ctx = cached[sym];
         if (!ctx) continue;
-        const r = B.run(ctx, { bars: BARS, warmup: WARMUP, weights: profile });
+        const r = B.run(ctx, { bars: BARS, warmup: WARMUP, weights: profile, strictness: STRICT || undefined });
         if (r.ok) trades.push(...r.trades);
       }
       out.sets[name].profiles[profile] = summarize(trades);

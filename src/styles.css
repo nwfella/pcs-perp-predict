@@ -141,6 +141,8 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .verdict-side.long { color: var(--up); }
 .verdict-side.short { color: var(--down); }
 .verdict-side.none { color: var(--text3); font-size: 30px; }
+/* An unfiltered setup must not read as an actionable call. */
+.verdict-side.setup { font-size: 26px; opacity: .82; }
 .verdict-meta { display: flex; flex-direction: column; gap: 3px; }
 .verdict-meta .sym { font-size: 16px; font-weight: 700; font-family: ui-monospace, monospace; }
 .verdict-meta .px { font-size: 13px; color: var(--text2); font-variant-numeric: tabular-nums; }
@@ -330,3 +332,30 @@ footer.bottom a { color: var(--text2); }
 .hidden { display: none !important; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
 .tabnum { font-variant-numeric: tabular-nums; }
+
+/* ---------- collapsible cards & groups ---------- */
+
+.card h2 { cursor: pointer; user-select: none; }
+button.disclosure {
+  flex: 0 0 auto; width: 18px; height: 18px; padding: 0; line-height: 1;
+  display: grid; place-items: center; font-size: 10px; font-weight: 700;
+  background: var(--surface2); color: var(--text2);
+  border: 1px solid var(--border); border-radius: 5px; cursor: pointer;
+}
+button.disclosure:hover { border-color: var(--text3); color: var(--text); }
+.card.collapsed { padding-bottom: 12px; }
+.card.collapsed > h2 { margin-bottom: 0; }
+.card.collapsed > .card-body { display: none; }
+/* Stops a collapsed card's header from looking pressable-but-dead on touch. */
+.card > h2:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 6px; }
+
+.group.collapsed .group-blurb,
+.group.collapsed .factor { display: none; }
+.group-head { cursor: pointer; user-select: none; }
+.group .group-caret {
+  flex: 0 0 auto; font-size: 10px; color: var(--text3); width: 12px; text-align: center;
+}
+.group-head:hover .gn { color: var(--accent); }
+
+.collapse-controls { display: flex; gap: 6px; align-items: flex-end; }
+.collapse-controls button { font-size: 11px; padding: 7px 10px; }

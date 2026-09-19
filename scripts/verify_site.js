@@ -129,12 +129,14 @@ const norm = (p) => p.replace(/\/fapi\/v1\//, '').split('&').sort().join('&');
 
   /* ---- verdict ---- */
   const v = htmlOf('verdictCard');
-  ok(/LONG|SHORT|NO TRADE/.test(v), 'verdict card shows a verdict');
+  ok(/LONG|SHORT|SETUP LONG|SETUP SHORT|NO TRADE/.test(v), 'verdict card shows a verdict');
   ok(/gauge-bar/.test(v), 'composite gauge rendered');
   ok(/gauge-needle/.test(v), 'gauge needle positioned');
   ok(/Composite/.test(v) && /Confidence/.test(v), 'key metrics rendered');
+  ok(/lean (LONG|SHORT|NEUTRAL)/.test(v), 'directional lean is always shown');
   ok(/What the .* profile actually measured/.test(v), 'verdict carries its own measured expectancy');
   ok(/NOT statistically significant|statistically significant/.test(v), 'expectancy states significance honestly');
+  ok(/setup — gates not passed|conviction|neutral — no direction/.test(v), 'tier label distinguishes trade from setup');
 
   /* ---- evidence ---- */
   const f = htmlOf('factorCard');
@@ -157,9 +159,10 @@ const norm = (p) => p.replace(/\/fapi\/v1\//, '').split('&').sort().join('&');
     ok((p.match(/plan-row tp/g) || []).length === 3, 'three target levels rendered');
     ok(/Stop distance/.test(p), 'stop distance metric present');
     ok(/Attainable R/.test(p), 'attainable R metric present');
+    ok(/Reachable targets/.test(p), 'reachable-target count present');
   } else {
-    ok(/No plan is generated while the verdict is NO TRADE/.test(p),
-      'NO TRADE state explains the absence of a plan instead of inventing levels');
+    ok(/pinned against the next structure|gates below blocked a trade|composite is neutral/.test(p),
+      'absent levels are explained instead of invented');
   }
   const sz = htmlOf('sizeCard');
   ok(/Position sizing/.test(sz), 'sizing card rendered');
@@ -184,8 +187,10 @@ const norm = (p) => p.replace(/\/fapi\/v1\//, '').split('&').sort().join('&');
   ok((val.match(/<tr>/g) || []).length >= 25, 'IC table rows rendered (got ' + (val.match(/<tr>/g) || []).length + ')');
   ok(/Out-of-sample walk-forward/.test(val), 'OOS section rendered');
   ok(/held out/.test(val), 'held-out rows labelled');
-  ok(/not statistically significant|worse<\/b> held-out/i.test(val) || /<b>worse<\/b> held-out numbers/.test(val),
-    'OOS result reported honestly');
+  ok(/opposite signs in the two columns|measuring noise/.test(val),
+    'OOS result reported honestly (sign flip called out, not sold as an edge)');
+  ok(/held out/.test(val) && /not<\/b> of the <b>gates|of the <b>weights<\/b> but not of the <b>gates/.test(val.replace(/\s+/g, ' ')),
+    'the panel states which parts the held-out column does and does not test');
   ok(/Exit policy comparison/.test(val), 'exit-policy comparison rendered');
   ok(/Balanced prior/.test(val), 'profile labels rendered');
   const validationFactorIds = ['A1', 'B3', 'C1', 'D2', 'E1', 'F2'];
@@ -206,7 +211,93 @@ const norm = (p) => p.replace(/\/fapi\/v1\//, '').split('&').sort().join('&');
   /* ---- watchlist ---- */
   ok(/Watchlist/.test(htmlOf('watchCard')), 'watchlist rendered');
 
-  /* ---- required static content ---- */
+  /* ---- collapsible panels + persistence ---- */
+  const cardIds = ['verdictCard', 'chartCard', 'planCard', 'sizeCard', 'heatCard',
+                   'factorCard', 'derivCard', 'validCard', 'btCard', 'watchCard'];
+  let disclosureCount = 0, collapsedByDefault = 0, expandedByDefault = 0;
+  cardIds.forEach((id) => {
+    const card = doc.querySelector('#' + id + ' .card');
+    if (!card) { fails.push('  FAIL missing card container #' + id); return; }
+    const h2 = card.querySelector('h2');
+    if (!h2) { fails.push('  FAIL #' + id + ' has no header'); return; }
+    const btn = h2.querySelector('button.disclosure');
+    if (btn) disclosureCount++;
+    ok(h2.getAttribute('data-collapse') === id, '#' + id + ' header is a collapse target');
+    ok(card.querySelector('.card-body') !== null, '#' + id + ' content is wrapped in a foldable body');
+    if (card.classList.contains('collapsed')) collapsedByDefault++; else expandedByDefault++;
+    const aria = h2.getAttribute('aria-expanded');
+    ok(aria === String(!card.classList.contains('collapsed')), '#' + id + ' aria-expanded matches visual state');
+  });
+  ok(disclosureCount === cardIds.length, 'every card has a disclosure caret (' + disclosureCount + '/' + cardIds.length + ')');
+  ok(collapsedByDefault >= 4, 'busy panels start folded (' + collapsedByDefault + ' folded, ' + expandedByDefault + ' open)');
+  ok(expandedByDefault >= 4, 'primary panels start open (' + expandedByDefault + ' open)');
+
+  const factorCardEl = doc.querySelector('#factorCard .card');
+  ok(factorCardEl.classList.contains('collapsed'), 'evidence panel is folded on first load');
+  ok(!doc.querySelector('#verdictCard .card').classList.contains('collapsed'), 'verdict panel is open on first load');
+
+  /* toggling must flip the class AND persist */
+  const vh2 = doc.querySelector('#verdictCard .card h2');
+  vh2.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await sleep(30);
+  const vCard = doc.querySelector('#verdictCard .card');
+  ok(vCard.classList.contains('collapsed'), 'clicking a header folds the panel');
+  ok((win.localStorage.getItem('ppp.collapsedCards') || '').indexOf('"verdictCard":true') !== -1,
+    'fold state persisted to localStorage');
+  vh2.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await sleep(30);
+  ok(!vCard.classList.contains('collapsed'), 'clicking again unfolds the panel');
+  ok((win.localStorage.getItem('ppp.collapsedCards') || '').indexOf('"verdictCard":false') !== -1,
+    'unfold state persisted to localStorage');
+
+  /* collapse/expand all */
+  ok(doc.getElementById('collapseAll') !== null && doc.getElementById('expandAll') !== null,
+    'collapse-all / expand-all controls exist');
+  doc.getElementById('expandAll').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await sleep(60);
+  const anyCollapsed = cardIds.filter((id) => {
+    const c = doc.querySelector('#' + id + ' .card');
+    return c && c.classList.contains('collapsed');
+  });
+  ok(anyCollapsed.length === 0, 'expand-all unfolds every panel' + (anyCollapsed.length ? ' (still folded: ' + anyCollapsed.join(',') + ')' : ''));
+  doc.getElementById('collapseAll').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await sleep(60);
+  const allCollapsed = cardIds.filter((id) => {
+    const c = doc.querySelector('#' + id + ' .card');
+    return c && c.classList.contains('collapsed');
+  });
+  ok(allCollapsed.length === cardIds.length, 'collapse-all folds every panel');
+  doc.getElementById('expandAll').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await sleep(60);
+
+  /* factor groups fold independently and persist separately */
+  const gHeads = doc.querySelectorAll('.group-head[data-group]');
+  ok(gHeads.length >= 6, 'factor groups are individually collapsible (' + gHeads.length + ')');
+  const g0 = gHeads[0];
+  g0.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await sleep(30);
+  ok(g0.closest('.group').classList.contains('collapsed'), 'clicking a group header folds that group');
+  ok((win.localStorage.getItem('ppp.collapsedGroups') || '').length > 4, 'group fold state persisted');
+  g0.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+  await sleep(30);
+
+  /* ---- risk-gate selector ---- */
+  const strictSeg = doc.getElementById('strictSeg');
+  ok(strictSeg !== null, 'risk-gate selector rendered');
+  const sBtns = strictSeg ? strictSeg.querySelectorAll('button[data-s]') : [];
+  ok(sBtns.length === 3, 'three strictness presets offered (got ' + sBtns.length + ')');
+  const activeBtn = strictSeg && strictSeg.querySelector('button[data-s].active');
+  ok(!!activeBtn && activeBtn.getAttribute('data-s') === 'balanced', 'balanced preset is the default');
+  if (sBtns.length === 3) {
+    sBtns[2].dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+    await sleep(80);
+    /* LS.set stores JSON, so the raw string is quoted */
+    ok((win.localStorage.getItem('ppp.strictness') || '').indexOf('aggressive') !== -1, 'strictness choice persisted');
+    ok(/aggressive/.test(htmlOf('verdictCard')), 'verdict reflects the selected strictness');
+    doc.querySelector('#strictSeg button[data-s="balanced"]').dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+    await sleep(80);
+  }
+
   ok(allText.indexOf('0xe09e6c33b444d246F1005BdCd404ff33Cb709EcA') !== -1, 'donation address present as static text');
   ok(/Support this project/.test(allText), 'donation ask present');
   ok(/Not financial advice/.test(allText), 'disclaimer present');
@@ -237,17 +328,28 @@ const norm = (p) => p.replace(/\/fapi\/v1\//, '').split('&').sort().join('&');
   if (r.ok) {
     ok(Math.abs(r.composite) <= 100, 'composite within [-100,100] (got ' + r.composite + ')');
     ok(r.confidence >= 0 && r.confidence <= 100, 'confidence within [0,100]');
-    ok(r.verdict === 'NO TRADE' || r.plan, 'a non-NO-TRADE verdict always ships a plan');
+    ok(typeof r.lean === 'string' && /LONG|SHORT|NEUTRAL/.test(r.lean), 'a directional lean is always computed');
+    ok(!r.hasTrade || !!r.plan, 'a gate-passed trade always ships a plan');
+    ok(!r.hasSetup || !r.hasTrade, 'setup and trade are mutually exclusive');
+    if (r.hasTrade) ok(r.plan && r.plan.targets.length === 3, 'a trade ships the full three-target ladder');
     if (r.plan) {
       const sideOK = r.plan.dir > 0 ? r.plan.stop < r.plan.entry : r.plan.stop > r.plan.entry;
       ok(sideOK, 'stop is on the correct side of entry for a ' + r.plan.side);
       r.plan.targets.forEach((t) => {
         const tpOK = r.plan.dir > 0 ? t.price > r.plan.entry : t.price < r.plan.entry;
         ok(tpOK, 'target ' + t.r + 'R is beyond entry');
+        ok((t.r <= r.plan.attainableR) === t.reachable,
+          'target ' + t.r + 'R reachable flag is consistent with attainableR');
       });
+      /* the stop must never be tighter than the ATR floor it advertises */
+      ok(r.plan.stopDist / r.plan.atr >= 0.599,
+        'stop is never tighter than the ' + 0.6 + 'x ATR floor (got ' + (r.plan.stopDist / r.plan.atr).toFixed(2) + 'x)');
     }
+    /* room-blocked rows must not publish levels at all */
+    ok(!r.roomBlocked || r.plan === null, 'a room-blocked setup withholds its levels');
     const blocked = r.blockers.length > 0;
-    ok(r.verdict === 'NO TRADE' ? blocked : true, 'NO TRADE always comes with a stated reason');
+    ok(r.hasTrade ? !blocked : true, 'a trade is only emitted with zero blockers');
+    ok(blocked || r.hasTrade, 'a blocked analysis never claims to be a trade');
     ok(r.blockers.every((b) => b && b.code && b.text), 'every blocker carries a stable code and readable text');
   }
 

@@ -37,12 +37,21 @@
   /* ------------------------------------------------------------- thresholds */
 
   var CFG = {
-    minComposite: 22,      // |composite| below this => NO TRADE
+    minComposite: 15,      // |composite| below this => NO TRADE
     minAgreement: 0.58,    // weighted share of factors backing the verdict
     minVolume24h: 1e6,     // USD quote volume floor
     minAtrPct: 0.05,       // dead market guard
     maxAtrPct: 15,         // unhinged market guard
-    minRR: 2.0,            // R:R to the *attainable* target before structure
+    /* "Not boxed in" check, NOT a demand for clear air. Structure between entry
+     * and target is a magnet the trend is expected to break, so requiring 2R of
+     * pristine space before the next swing is unsatisfiable: the measured median
+     * attainable room on 1h is 0.88R, which made this gate reject 72% of pairs
+     * on its own. Only refuse when price is pinned against structure closer than
+     * half a stop. */
+    minAttainableR: 0.5,
+    leanThreshold: 8,      // |composite| below this reads as NEUTRAL
+    roomRR: 1.5,           // reward:risk the stop must leave room for
+    minStopAtrMult: 0.6,   // never tighten the stop below this many ATR
     atrStopMult: 1.5,
     stopFloorPct: 0.35,
     stopCeilPct: 6.0,
@@ -52,6 +61,39 @@
       { r: 5.0, portion: 0.25 }
     ]
   };
+
+  /* Selectable strictness. The loosest setting exists because a tool that says
+   * NO TRADE on every pair carries no information; the strictest exists because
+   * none of these profiles has a demonstrated edge, so selectivity is a
+   * legitimate choice. Which one you run is yours — what measured what is shown
+   * either way. */
+  var STRICTNESS = {
+    conservative: { minComposite: 22, minAgreement: 0.62, minAttainableR: 1.0 },
+    balanced:     { minComposite: 15, minAgreement: 0.58, minAttainableR: 0.5 },
+    aggressive:   { minComposite: 10, minAgreement: 0.52, minAttainableR: 0.25 }
+  };
+  var DEFAULT_STRICTNESS = 'balanced';
+
+  function thresholdSet(strictness) {
+    var s = STRICTNESS[strictness] || STRICTNESS[DEFAULT_STRICTNESS];
+    return {
+      minComposite: s.minComposite,
+      minAgreement: s.minAgreement,
+      minAttainableR: s.minAttainableR,
+      minVolume24h: CFG.minVolume24h,
+      minAtrPct: CFG.minAtrPct,
+      maxAtrPct: CFG.maxAtrPct
+    };
+  }
+
+  /* Directional read, always available, independent of whether the gates let a
+   * plan through. A NO TRADE verdict should still tell you which way the
+   * evidence leans instead of saying nothing. */
+  function leanOf(composite) {
+    if (composite >= CFG.leanThreshold) return { lean: 'LONG', sign: 1 };
+    if (composite <= -CFG.leanThreshold) return { lean: 'SHORT', sign: -1 };
+    return { lean: 'NEUTRAL', sign: 0 };
+  }
 
   function sign(x) { return x > 0 ? 1 : x < 0 ? -1 : 0; }
   function lastN(a, n) { return a.slice(Math.max(0, a.length - n)); }
@@ -699,43 +741,13 @@
     var i = p1.n - 1;
     var price = p1.c[i];
     var atr = p1.atr14[i];
-    var b = p1.bars[i];
     var warnings = [];
     if (!atr) return { ok: false, reason: 'ATR unavailable — cannot size a stop.' };
 
-    var stopBase = CFG.atrStopMult * atr;
-
-    /* widen to clear the nearest opposing structure level */
-    var structDist = null;
-    if (dir > 0) {
-      for (var j = p1.sw.lows.length - 1; j >= 0; j--) {
-        var lx = p1.sw.lows[j];
-        if (lx.i >= i || lx.i < i - 40) continue;
-        if (lx.price < price) { structDist = price - lx.price; break; }
-      }
-    } else {
-      for (var k = p1.sw.highs.length - 1; k >= 0; k--) {
-        var hx = p1.sw.highs[k];
-        if (hx.i >= i || hx.i < i - 40) continue;
-        if (hx.price > price) { structDist = hx.price - price; break; }
-      }
-    }
-    var stopDist = stopBase;
-    if (structDist !== null && structDist > stopBase && structDist < stopBase * 2.2) {
-      stopDist = structDist * 1.15;
-      warnings.push('Stop widened to clear the nearest swing level (' + structDist.toFixed(6) + ' away) instead of a bare ATR stop.');
-    }
-    var floorD = price * CFG.stopFloorPct / 100, ceilD = price * CFG.stopCeilPct / 100;
-    if (stopDist < floorD) { stopDist = floorD; warnings.push('Stop clamped up to the ' + CFG.stopFloorPct + '% floor.'); }
-    if (stopDist > ceilD) { stopDist = ceilD; warnings.push('Stop clamped down to the ' + CFG.stopCeilPct + '% ceiling — structure stop was too wide.'); }
-
-    var entry = price;
-    var stop = entry - dir * stopDist;
-    var targets = CFG.targets.map(function (t) {
-      return { r: t.r, portion: t.portion, price: entry + dir * stopDist * t.r };
-    });
-
-    /* genuine attainable R before opposing structure gets in the way */
+    /* Room to the nearest OPPOSING structure — the first level that can stall the
+     * move (above price for a long, below for a short). Measured before the stop
+     * because it constrains it: a stop wider than the available room guarantees
+     * targets the market cannot reach. */
     var roomAtr = null;
     if (dir > 0) {
       for (var m = 0; m < p1.sw.highs.length; m++) {
@@ -750,15 +762,80 @@
         if (lz.price < price) { roomAtr = (price - lz.price) / atr; break; }
       }
     }
+
+    /* Invalidation level: the nearest structure on the STOP side. The stop belongs
+     * beyond it, or the level that proves the setup wrong is not covered. */
+    var invalidDist = null;
+    if (dir > 0) {
+      for (var j = p1.sw.lows.length - 1; j >= 0; j--) {
+        var lx = p1.sw.lows[j];
+        if (lx.i >= i || lx.i < i - 40) continue;
+        if (lx.price < price) { invalidDist = price - lx.price; break; }
+      }
+    } else {
+      for (var k = p1.sw.highs.length - 1; k >= 0; k--) {
+        var hx = p1.sw.highs[k];
+        if (hx.i >= i || hx.i < i - 40) continue;
+        if (hx.price > price) { invalidDist = hx.price - price; break; }
+      }
+    }
+
+    var stopBase = CFG.atrStopMult * atr;
+    var stopDist = stopBase;
+    var validated = null;
+    if (invalidDist !== null && invalidDist > stopBase && invalidDist < stopBase * 2.2) {
+      stopDist = invalidDist * 1.15;
+      validated = 'Stop widened to sit beyond the invalidation level ' + (invalidDist / atr).toFixed(2) + 'x ATR away, instead of a bare ATR stop.';
+    }
+
+    /* Cap the stop by the available room so the reward ladder stays reachable.
+     * Without this, a 1.5x ATR stop against 0.9x ATR of room scores 0.6R and every
+     * target sits at a level the market cannot reach before structure stops it. */
+    if (roomAtr !== null) {
+      var maxStopForRoom = (roomAtr * atr) / CFG.roomRR;
+      var tightenFloor = CFG.minStopAtrMult * atr;
+      if (stopDist > maxStopForRoom) {
+        var tightened = Math.max(maxStopForRoom, tightenFloor);
+        if (tightened < stopDist) {
+          stopDist = tightened;
+          /* The room cap overrode the structure widening, so reporting both would
+           * read as contradictory. The cap is the binding constraint. */
+          validated = null;
+          warnings.push('Stop tightened to ' + (stopDist / atr).toFixed(2) + 'x ATR so the targets fit inside the ' +
+            roomAtr.toFixed(2) + 'x ATR of room before the next structure.');
+        }
+      }
+    }
+    if (validated) warnings.push(validated);
+
+    var floorD = price * CFG.stopFloorPct / 100, ceilD = price * CFG.stopCeilPct / 100;
+    if (stopDist < floorD) { stopDist = floorD; warnings.push('Stop clamped up to the ' + CFG.stopFloorPct + '% floor.'); }
+    if (stopDist > ceilD) { stopDist = ceilD; warnings.push('Stop clamped down to the ' + CFG.stopCeilPct + '% ceiling — structure stop was too wide.'); }
+
+    /* No structure within 60 bars means open air, so every target fits. */
     var attainableR = roomAtr === null ? 5 : roomAtr / (stopDist / atr);
 
+    var entry = price;
+    var stop = entry - dir * stopDist;
+    var targets = CFG.targets.map(function (t) {
+      return {
+        r: t.r, portion: t.portion,
+        price: entry + dir * stopDist * t.r,
+        /* A target beyond the nearest opposing structure is a stretch, not an
+         * impossibility — a trend is expected to break structure. Flagging it is
+         * more honest than silently promising the level. */
+        reachable: t.r <= attainableR
+      };
+    });
+
     var stopPct = stopDist / entry * 100;
+    var blendedR = targets.reduce(function (a, t) { return a + t.r * t.portion; }, 0);
     return {
       ok: true, dir: dir, side: dir > 0 ? 'LONG' : 'SHORT',
       entry: entry, stop: stop, stopDist: stopDist, stopPct: stopPct,
       atr: atr, atrPct: atr / entry * 100,
-      targets: targets,
-      roomAtr: roomAtr, attainableR: attainableR,
+      targets: targets, blendedR: blendedR,
+      roomAtr: roomAtr, invalidDist: invalidDist, attainableR: attainableR,
       warnings: warnings
     };
   }
@@ -830,39 +907,48 @@
     return finalize({
       ctx: ctx, factors: factors, comp: comp, price: price,
       atrPct: atrPct, vol24h: vol24h, opts: opts, symbol: ctx.symbol || '—',
-      tf: opts.interval || '1h', profile: profile
+      tf: opts.interval || '1h', profile: profile,
+      strictness: opts.strictness || DEFAULT_STRICTNESS
     });
   }
 
   /* Shared verdict assembly so the backtest and the live path cannot drift. */
   function finalize(s) {
     var factors = s.factors, comp = s.comp, blockers = [], notes = [];
+    var T = thresholdSet(s.strictness);
+    var lz = leanOf(comp.composite);
 
     var dir = comp.composite > 0 ? 1 : comp.composite < 0 ? -1 : 0;
 
-    if (Math.abs(comp.composite) < CFG.minComposite) {
-      blockers.push(blk('BAND_MIN', 'Composite ' + comp.composite.toFixed(1) + ' is inside the ±' + CFG.minComposite + ' no-trade band — signals are too balanced to justify a position.'));
+    if (Math.abs(comp.composite) < T.minComposite) {
+      blockers.push(blk('BAND_MIN', 'Composite ' + comp.composite.toFixed(1) + ' is inside the ±' + T.minComposite + ' no-trade band — signals are too balanced to justify a position.'));
     }
-    if (comp.agreement < CFG.minAgreement) {
-      blockers.push(blk('AGREE', 'Only ' + (comp.agreement * 100).toFixed(0) + '% of the weighted evidence agrees on direction (needs ' + Math.round(CFG.minAgreement * 100) + '%) — the factors are fighting each other.'));
+    if (comp.agreement < T.minAgreement) {
+      blockers.push(blk('AGREE', 'Only ' + (comp.agreement * 100).toFixed(0) + '% of the weighted evidence agrees on direction (needs ' + Math.round(T.minAgreement * 100) + '%) — the factors are fighting each other.'));
     }
-    if (s.vol24h !== null && s.vol24h !== undefined && s.vol24h < CFG.minVolume24h) {
+    if (s.vol24h !== null && s.vol24h !== undefined && s.vol24h < T.minVolume24h) {
       blockers.push(blk('VOL24H', '24h quote volume $' + Math.round(s.vol24h).toLocaleString() + ' is under the $1M liquidity floor.'));
     }
     if (s.atrPct !== null && s.atrPct !== undefined) {
-      if (s.atrPct < CFG.minAtrPct) blockers.push(blk('VOL_LOW', 'Realised volatility ' + s.atrPct.toFixed(3) + '% per bar is too low — no movement to capture.'));
-      if (s.atrPct > CFG.maxAtrPct) blockers.push(blk('VOL_HIGH', 'Realised volatility ' + s.atrPct.toFixed(2) + '% per bar is extreme — stop placement cannot be trusted.'));
+      if (s.atrPct < T.minAtrPct) blockers.push(blk('VOL_LOW', 'Realised volatility ' + s.atrPct.toFixed(3) + '% per bar is too low — no movement to capture.'));
+      if (s.atrPct > T.maxAtrPct) blockers.push(blk('VOL_HIGH', 'Realised volatility ' + s.atrPct.toFixed(2) + '% per bar is extreme — stop placement cannot be trusted.'));
     }
     if (comp.coverage < 0.8) {
       blockers.push(blk('COVERAGE', 'Only ' + (comp.coverage * 100).toFixed(0) + '% of the model weight had data available.'));
     }
 
-    var plan = null, size = null;
-    if (dir !== 0) {
+    var plan = null, size = null, roomBlocked = false;
+    /* Levels are only built when there is an actual directional read; a neutral
+     * composite has no side to plan for. */
+    if (dir !== 0 && lz.sign !== 0) {
       plan = buildPlan(s.ctx, dir, factors, comp);
       if (plan && plan.ok) {
-        if (plan.attainableR < CFG.minRR) {
-          blockers.push(blk('ROOM', 'Only ' + plan.attainableR.toFixed(2) + 'R of room before the next opposing structure (needs ' + CFG.minRR + 'R) — the profit target is not reachable.'));
+        if (plan.attainableR < T.minAttainableR) {
+          blockers.push(blk('ROOM', 'Only ' + plan.attainableR.toFixed(2) + 'R of room before the next opposing structure (needs ' + T.minAttainableR + 'R) — price is boxed in against structure, with nowhere for the trade to travel.'));
+          /* No coherent geometry exists: any target ladder would sit at levels the
+           * market cannot reach. Withhold the levels rather than draw fiction, but
+           * keep the direction and the evidence. */
+          roomBlocked = true;
         }
         size = positionSize(plan, {
           equity: s.opts.equity, riskPct: s.opts.riskPct, leverage: s.opts.leverage,
@@ -884,13 +970,25 @@
     var clarity = adxNow === null ? 0.5 : I.clamp(0.45 + adxNow / 60, 0.45, 1);
     var confidence = I.clamp(100 * (0.45 * comp.agreement + 0.40 * magnitude + 0.15 * clarity), 0, 100);
 
-    var hasTrade = blockers.length === 0 && dir !== 0 && plan !== null;
+    /* A directional read with computable levels is useful even when the risk
+     * gates reject it, so it is surfaced as an explicit SETUP instead of being
+     * swallowed into NO TRADE. The distinction between a gate-filtered TRADE and
+     * an unfiltered SETUP is the point — the failing gates are listed either way,
+     * and nothing is dressed up as validated when it is not. */
+    var hasDirection = dir !== 0 && lz.sign !== 0 && plan !== null;
+    var hasTrade = blockers.length === 0 && hasDirection;
+    var hasSetup = !hasTrade && hasDirection;
     var tier = 'NONE';
     if (hasTrade) {
       if (Math.abs(comp.composite) >= 60 && comp.agreement >= 0.72 && confidence >= 70) tier = 'HIGH';
       else if (Math.abs(comp.composite) >= 40 && confidence >= 55) tier = 'MEDIUM';
       else tier = 'LOW';
+    } else if (hasSetup) {
+      tier = 'WATCH';
     }
+    var verdict = hasTrade ? (dir > 0 ? 'LONG' : 'SHORT')
+      : hasSetup ? ('SETUP ' + lz.lean)
+      : 'NO TRADE';
 
     /* Group rollups for the UI. */
     var groups = GROUPS.map(function (g) {
@@ -912,18 +1010,25 @@
     return {
       ok: true, version: VERSION,
       symbol: s.symbol, interval: s.tf, ts: Date.now(),
-      profile: s.profile || 'balanced',
+      profile: s.profile || DEFAULT_PROFILE,
+      strictness: s.strictness || DEFAULT_STRICTNESS,
+      thresholds: T,
+      lean: lz.lean, leanSign: lz.sign,
       price: s.price, atrPct: s.atrPct,
       composite: Math.round(comp.composite * 10) / 10,
       confidence: Math.round(confidence * 10) / 10,
       agreement: comp.agreement, coverage: comp.coverage,
-      verdict: hasTrade ? (dir > 0 ? 'LONG' : 'SHORT') : 'NO TRADE',
+      verdict: verdict,
       direction: hasTrade ? dir : 0,
+      leanDir: dir,
+      hasTrade: hasTrade, hasSetup: hasSetup,
       tier: tier,
       blockers: blockers, notes: notes,
       groups: groups,
       contextFactors: contextFactors,
-      plan: plan, size: size,
+      plan: roomBlocked ? null : plan,
+      size: roomBlocked ? null : size,
+      roomBlocked: roomBlocked,
       warnings: buildWarnings(s)
     };
   }
@@ -941,6 +1046,8 @@
   return {
     VERSION: VERSION, CFG: CFG, GROUPS: GROUPS, WEIGHTS: WEIGHTS,
     DEFAULT_PROFILE: DEFAULT_PROFILE, PROFILE_LABELS: PROFILE_LABELS,
+    STRICTNESS: STRICTNESS, DEFAULT_STRICTNESS: DEFAULT_STRICTNESS,
+    thresholdSet: thresholdSet, leanOf: leanOf,
     sumWeights: sumWeights, isContextOnly: isContextOnly,
     prep: prep, withCumDelta: withCumDelta,
     buildFactors: buildFactors, compositeOf: compositeOf,

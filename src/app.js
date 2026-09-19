@@ -29,6 +29,7 @@
     symbol: LS.get('symbol', 'BTCUSDT'),
     chartTf: LS.get('chartTf', '1h'),
     profile: LS.get('profile', E.DEFAULT_PROFILE),
+    strictness: LS.get('strictness', E.DEFAULT_STRICTNESS),
     ctx: null,
     res: null,
     heat: null,
@@ -45,6 +46,128 @@
   };
 
   var $ = function (id) { return document.getElementById(id); };
+
+  /* ------------------------------------------------------- collapse state
+   *
+   * Every card and every factor group can be folded away, and the layout is
+   * remembered in localStorage so a returning user gets the page they arranged
+   * rather than a wall of panels. The busy cards default to folded: the verdict,
+   * chart, plan and sizing are what you look at first.
+   */
+  var CARD_IDS = ['verdictCard', 'chartCard', 'planCard', 'sizeCard', 'heatCard',
+                  'factorCard', 'derivCard', 'validCard', 'btCard', 'watchCard'];
+  var CARD_DEFAULTS = {
+    verdictCard: false, chartCard: false, planCard: false, sizeCard: false,
+    heatCard: false, factorCard: true, derivCard: true,
+    validCard: true, btCard: true, watchCard: true
+  };
+  var collapsedCards = LS.get('collapsedCards', null);
+  var collapsedGroups = LS.get('collapsedGroups', null);
+
+  function isCardCollapsed(id) {
+    if (collapsedCards && typeof collapsedCards[id] === 'boolean') return collapsedCards[id];
+    return !!CARD_DEFAULTS[id];
+  }
+  function setCardCollapsed(id, v) {
+    collapsedCards = collapsedCards || {};
+    collapsedCards[id] = v;
+    LS.set('collapsedCards', collapsedCards);
+  }
+  function isGroupCollapsed(id) {
+    return !!(collapsedGroups && collapsedGroups[id]);
+  }
+  function setGroupCollapsed(id, v) {
+    collapsedGroups = collapsedGroups || {};
+    collapsedGroups[id] = v;
+    LS.set('collapsedGroups', collapsedGroups);
+  }
+
+  /* Wrap a card's content in a foldable body and stamp the caret. Idempotent, so
+   * it is safe to call after every render pass. */
+  function applyCollapse() {
+    CARD_IDS.forEach(function (id) {
+      var host = $(id);
+      if (!host) return;
+      var card = host.querySelector('.card');
+      if (!card) return;
+      var h2 = card.querySelector('h2');
+      if (!h2) return;
+      var collapsed = isCardCollapsed(id);
+      if (!h2.querySelector('.disclosure')) {
+        var btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'disclosure';
+        btn.textContent = collapsed ? '▸' : '▾';
+        h2.insertBefore(btn, h2.firstChild);
+        h2.setAttribute('data-collapse', id);
+        h2.setAttribute('role', 'button');
+        h2.setAttribute('tabindex', '0');
+        h2.setAttribute('aria-expanded', String(!collapsed));
+        /* move everything after the header into a foldable body */
+        var body = document.createElement('div');
+        body.className = 'card-body';
+        var rest = [];
+        for (var n = h2.nextSibling; n; n = n.nextSibling) rest.push(n);
+        rest.forEach(function (node) { body.appendChild(node); });
+        card.appendChild(body);
+      }
+      card.classList.toggle('collapsed', collapsed);
+      var b = h2.querySelector('.disclosure');
+      if (b) { b.textContent = collapsed ? '▸' : '▾'; h2.setAttribute('aria-expanded', String(!collapsed)); }
+    });
+  }
+
+  function toggleCard(id) {
+    var host = $(id);
+    if (!host) return;
+    var card = host.querySelector('.card');
+    if (!card) return;
+    var now = !card.classList.contains('collapsed');
+    card.classList.toggle('collapsed', now);
+    setCardCollapsed(id, now);
+    var h2 = card.querySelector('h2'), b = h2 && h2.querySelector('.disclosure');
+    if (b) b.textContent = now ? '▸' : '▾';
+    if (h2) h2.setAttribute('aria-expanded', String(!now));
+    /* A canvas inside a hidden container has zero width, so redraw it once it is
+     * visible again rather than leaving a stretched or blank chart. */
+    if (!now) {
+      if (id === 'chartCard') setTimeout(renderChart, 0);
+      else if (id === 'btCard') setTimeout(renderBacktest, 0);
+      else if (id === 'derivCard') setTimeout(renderDerivatives, 0);
+    }
+  }
+
+  function bindCollapse() {
+    document.addEventListener('click', function (ev) {
+      var gHead = ev.target.closest('.group-head[data-group]');
+      if (gHead) {
+        var gid = gHead.getAttribute('data-group');
+        var group = gHead.closest('.group');
+        var now = !group.classList.contains('collapsed');
+        group.classList.toggle('collapsed', now);
+        setGroupCollapsed(gid, now);
+        var c = gHead.querySelector('.group-caret');
+        if (c) c.textContent = now ? '▸' : '▾';
+        return;
+      }
+      var head = ev.target.closest('h2[data-collapse]');
+      if (head) toggleCard(head.getAttribute('data-collapse'));
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key !== 'Enter' && ev.key !== ' ') return;
+      var head = ev.target.closest && ev.target.closest('h2[data-collapse], .group-head[data-group]');
+      if (!head) return;
+      ev.preventDefault();
+      head.click();
+    });
+  }
+
+  function setAllCollapsed(v) {
+    CARD_IDS.forEach(function (id) { setCardCollapsed(id, v); });
+    Object.keys(ENGINE_GROUPS).forEach(function (g) { setGroupCollapsed(g, v); });
+    renderAll();
+  }
+  var ENGINE_GROUPS = { A: 1, B: 1, C: 1, D: 1, E: 1, F: 1 };
   var esc = function (s) {
     return String(s === null || s === undefined ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -105,7 +228,7 @@
 
   function analysisOpts() {
     return {
-      interval: '1h', weights: S.profile,
+      interval: '1h', weights: S.profile, strictness: S.strictness,
       equity: S.equity, riskPct: S.riskPct, leverage: S.leverage,
       feePct: 0.035, slipPct: 0.02
     };
@@ -114,7 +237,8 @@
   function reanalyze() {
     if (!S.ctx) return;
     S.res = E.analyze(S.ctx, analysisOpts());
-    renderVerdict(); renderFactors(); renderPlan(); renderDerivatives();
+    renderVerdict(); renderFactors(); renderPlan(); renderDerivatives(); renderSizing();
+    applyCollapse();
   }
 
   /* ------------------------------------------------------------- heatmap */
@@ -183,6 +307,7 @@
     renderWatchlist();
     renderValidation();
     renderBacktest();
+    applyCollapse();
   }
 
   function renderStatus(text, cls) {
@@ -207,21 +332,30 @@
       return;
     }
 
-    var side = r.verdict === 'NO TRADE' ? 'none' : r.verdict.toLowerCase();
+    var isTrade = !!r.hasTrade, isSetup = !!r.hasSetup;
+    var side = isTrade ? r.verdict.toLowerCase()
+      : isSetup ? (r.lean === 'LONG' ? 'long' : 'short')
+      : 'none';
     var meta = pairMeta(r.symbol);
     var tick = S.ctx && S.ctx.deriv ? S.ctx.deriv.ticker : {};
     var chg = tick.priceChangePercent !== undefined ? parseFloat(tick.priceChangePercent) : null;
 
     var html = '';
     html += '<div class="card verdict-card ' + side + '">';
-    html += '<h2>Verdict <span class="tag">' + esc(r.profile) + ' weights</span><span class="right">composite model · 22 factors</span></h2>';
+    html += '<h2>Verdict <span class="tag">weights: ' + esc(r.profile) + '</span><span class="tag">gates: ' + esc(r.strictness) + '</span>';
+    html += '<span class="right">composite model · 22 factors</span></h2>';
     html += '<div class="verdict-head">';
-    html += '<div class="verdict-side ' + side + '">' + (r.verdict === 'NO TRADE' ? 'NO TRADE' : r.verdict) + '</div>';
+    html += '<div class="verdict-side ' + side + (isSetup ? ' setup' : '') + '">' + esc(r.verdict) + '</div>';
     html += '<div class="verdict-meta">';
     html += '<span class="sym">' + esc(r.symbol) + '</span>';
     html += '<span class="px">' + fmtPrice(r.price) + ' USDT' + (chg !== null ? ' · 24h <b class="' + (chg >= 0 ? 'up' : 'down') + '" style="color:' + (chg >= 0 ? 'var(--up)' : 'var(--down)') + '">' + signed(chg, 2) + '%</b>' : '') + '</span>';
     html += '<div style="display:flex;gap:6px;margin-top:5px;flex-wrap:wrap">';
-    html += '<span class="pill ' + (r.tier === 'HIGH' ? 'high' : r.tier === 'MEDIUM' ? 'medium' : r.tier === 'LOW' ? 'low' : 'none') + '">' + (r.tier === 'NONE' ? 'no position' : r.tier + ' conviction') + '</span>';
+    html += isTrade
+      ? '<span class="pill ' + (r.tier === 'HIGH' ? 'high' : r.tier === 'MEDIUM' ? 'medium' : 'low') + '">' + r.tier + ' conviction</span>'
+      : isSetup
+        ? '<span class="pill low">setup — gates not passed</span>'
+        : '<span class="pill none">neutral — no direction</span>';
+    html += '<span class="pill">lean ' + esc(r.lean) + '</span>';
     html += '<span class="pill">agreement ' + (r.agreement * 100).toFixed(0) + '%</span>';
     html += '<span class="pill">coverage ' + (r.coverage * 100).toFixed(0) + '%</span>';
     html += '</div></div>';
@@ -269,6 +403,7 @@
     html += edgeStrip(r.profile);
     html += '</div>';
     el.innerHTML = html;
+    applyCollapse();
   }
 
   function metric(k, v, cls, small) {
@@ -294,8 +429,7 @@
     } else {
       html += '<b>Measured expectancy unavailable.</b> Regenerate it with <span class="mono">node scripts/oos_test.mjs</span>.';
     }
-    html += '<br><b>Both data-fitted weightings in this build failed on held-out symbols, so the default is the unfitted design prior.</b> ' +
-      'Treat the verdict as a structured summary of current conditions, not a forecast — costs alone run about 0.09R per trade, and nothing here has demonstrated an edge that clears them.</div>';
+    html += '<br><b>Read this as a structured summary of conditions, not a forecast.</b> No weight profile here has shown an edge that clears costs: the best held-out figure is statistically indistinguishable from zero, and the unfitted default reverses sign between the two halves of the test. Costs alone run about 0.09R per trade. The direction and levels are the useful part; the conviction is not.</div>';
     return html;
   }
 
@@ -329,6 +463,7 @@
     html += '</div>';
     html += '<div class="chart-wrap"><canvas id="priceChart"></canvas></div></div>';
     el.innerHTML = html;
+    applyCollapse();
 
     C.drawPrice($('priceChart'), {
       bars: bars,
@@ -383,6 +518,7 @@
     });
     html += '</div></div>';
     el.innerHTML = html;
+    applyCollapse();
   }
 
   function renderFactors() {
@@ -393,8 +529,11 @@
     html += '<span class="right">' + r.groups.reduce(function (a, g) { return a + g.factors.length; }, 0) + ' factors</span></h2>';
     r.groups.forEach(function (g) {
       if (!g.factors.length) return;
-      html += '<div class="group">';
-      html += '<div class="group-head"><span class="gn">' + esc(g.id + ' · ' + g.name) + '</span>';
+      var gCol = isGroupCollapsed(g.id);
+      html += '<div class="group' + (gCol ? ' collapsed' : '') + '">';
+      html += '<div class="group-head" data-group="' + esc(g.id) + '" role="button" tabindex="0" aria-expanded="' + (!gCol) + '">';
+      html += '<span class="group-caret">' + (gCol ? '▸' : '▾') + '</span>';
+      html += '<span class="gn">' + esc(g.id + ' · ' + g.name) + '</span>';
       html += '<span class="gw">w ' + fmtNum(g.weight, 2) + '</span>';
       html += '<span class="gs ' + scoreClass(g.score) + '" style="color:' + (g.score > 0.05 ? 'var(--up)' : g.score < -0.05 ? 'var(--down)' : 'var(--text2)') + '">' + signed(g.score, 2) + '</span></div>';
       html += '<div class="group-blurb">' + esc(g.blurb) + '</div>';
@@ -422,6 +561,7 @@
     }
     html += '</div>';
     el.innerHTML = html;
+    applyCollapse();
   }
 
   function renderDerivatives() {
@@ -456,7 +596,10 @@
     }
     html += '</div>';
     el.innerHTML = html;
-    if (rates.length > 5) drawFunding($('fundChart'), rates);
+    applyCollapse();
+    /* A collapsed canvas measures zero width, so only draw when it is visible;
+     * expanding re-renders via the collapse handler. */
+    if (rates.length > 5 && !isCardCollapsed('derivCard')) drawFunding($('fundChart'), rates);
   }
 
   function drawFunding(canvas, rates) {
@@ -491,7 +634,13 @@
     var r = S.res;
     if (!r || !r.ok) { el.innerHTML = '<div class="card"><h2>Trade plan</h2><div class="err">No analysis</div></div>'; return; }
     if (!r.plan) {
-      el.innerHTML = '<div class="card"><h2>Trade plan</h2><div class="notes"><div class="note"><span class="nc">—</span><span>No plan is generated while the verdict is NO TRADE. Levels are only drawn when every gate passes, because a stop and target on a signal that did not clear its own filters would be a fabricated level.</span></div></div></div>';
+      var why = r.roomBlocked
+        ? 'A direction is available, but no levels are drawn: price is pinned against the next structure, so any target would sit at a level the market cannot reach before that level turns it back. The setup is real; the geometry is not there yet.'
+        : r.hasSetup
+          ? 'Directional setup only — the gates below blocked a trade, so no entry, stop or target is published for it.'
+          : 'The composite is neutral (inside ±' + (r.thresholds ? r.thresholds.minComposite : 15) + ' of the no-trade band threshold), so there is no side to plan for.';
+      el.innerHTML = '<div class="card"><h2>Trade plan' + (r.hasSetup ? ' <span class="tag">' + esc(r.lean) + '</span>' : '') + '</h2><div class="notes"><div class="note"><span class="nc">—</span><span>' + esc(why) + '</span></div></div></div>';
+      applyCollapse();
       return;
     }
     var pl = r.plan, pr = r.price;
@@ -508,16 +657,18 @@
     html += '</div>';
     html += '<div class="metrics" style="margin-top:12px">';
     html += metric('Stop distance', fmtNum(pl.stopPct, 3) + '%', '', true);
+    html += metric('Stop vs ATR', fmtNum(pl.stopDist / pl.atr, 2) + '×', '', true);
     html += metric('Room to structure', pl.roomAtr === null ? 'open' : fmtNum(pl.roomAtr, 2) + ' ATR', '', true);
-    html += metric('Attainable R', fmtNum(pl.attainableR, 2) + 'R', pl.attainableR >= 2 ? 'up' : 'down', true);
-    html += metric('Blended R:R', fmtNum(pl.targets.reduce(function (a, t) { return a + t.r * t.portion; }, 0), 2) + ':1', 'up', true);
+    html += metric('Attainable R', fmtNum(pl.attainableR, 2) + 'R', pl.attainableR >= 1.5 ? 'up' : 'down', true);
+    html += metric('Blended R:R', fmtNum(pl.blendedR, 2) + ':1', pl.blendedR >= 2 ? 'up' : '', true);
+    html += metric('Reachable targets', pl.targets.filter(function (t) { return t.reachable; }).length + ' / ' + pl.targets.length, '', true);
     html += '</div>';
     if (pl.warnings && pl.warnings.length) {
       html += '<div class="notes" style="margin-top:10px">';
       pl.warnings.forEach(function (w) { html += '<div class="note"><span class="nc">!</span><span>' + esc(w) + '</span></div>'; });
       html += '</div>';
     }
-    html += '<div class="notes" style="margin-top:10px"><div class="note"><span class="nc">i</span><span>Targets beyond ' + fmtNum(pl.attainableR, 2) + 'R are marked unreachable — the next opposing structure sits before them.</span></div></div>';
+    html += '<div class="notes" style="margin-top:10px"><div class="note"><span class="nc">i</span><span>Targets beyond ' + fmtNum(pl.attainableR, 2) + 'R are marked unreachable — the next opposing structure sits before them, so treat those as stretch levels rather than expected exits.</span></div></div>';
     html += '</div>';
     el.innerHTML = html;
   }
@@ -555,6 +706,7 @@
     }
     html += '</div>';
     el.innerHTML = html;
+    applyCollapse();
     bindSizing();
   }
 
@@ -584,7 +736,7 @@
     var html = '<div class="card"><h2>Model validation <span class="tag">measured, not asserted</span></h2>';
     if (!ic || !ic.factors) {
       html += '<div class="notes"><div class="note"><span class="nc">—</span><span>Validation data not baked into this build. Generate it with <span class="mono">node scripts/ic_study.mjs</span> and <span class="mono">node scripts/oos_test.mjs</span>, then rebuild.</span></div></div></div>';
-      el.innerHTML = html; return;
+      el.innerHTML = html; applyCollapse(); return;
     }
     html += '<div class="notes" style="margin-bottom:12px">';
     html += '<div class="note"><span class="nc">i</span><span><b>Information coefficient</b> = correlation between a factor&rsquo;s score at bar t and the forward return. ' + ic.samples.toLocaleString() + ' samples across ' + ic.symbols.length + ' symbols. |t| &lt; 2 is indistinguishable from noise.</span></div>';
@@ -636,7 +788,17 @@
       html += '</tbody></table>';
       html += '<div class="notes" style="margin-top:10px">';
       (oos.method ? [oos.method.note] : []).forEach(function (n) { html += '<div class="note"><span class="nc">i</span><span>' + esc(n) + '</span></div>'; });
-      html += '<div class="note"><span class="nc">!</span><span>Two independent reweighting rules were fitted and both land on <b>worse</b> held-out numbers than the unfitted prior. That is the central result of this project: with this factor set there is no reliable edge to extract, and a confidently-presented signal would be misleading. The app therefore defaults to the unfitted prior and shows you this table.</span></div>';
+      /* State the sign flip explicitly and compute it from the data, so the panel
+       * cannot drift into claiming an edge the table itself contradicts. */
+      var fitB = oos.sets.fit.profiles.balanced, testB = oos.sets.test.profiles.balanced;
+      if (fitB && testB && (fitB.avgR > 0) !== (testB.avgR > 0)) {
+        html += '<div class="note"><span class="nc">!</span><span><b>The same unfitted profile has opposite signs in the two columns</b> — ' +
+          signed(fitB.avgR, 3) + 'R on the fit symbols (t ' + fmtNum(fitB.tStatistic, 2) + ') and ' +
+          signed(testB.avgR, 3) + 'R on the held-out ones (t ' + fmtNum(testB.tStatistic, 2) + '), with no change in weighting between them. ' +
+          'A profile that flips sign across halves is measuring noise, so a held-out |t| above 2 here should not be read as a discovery. ' +
+          'The single most useful thing to do next is test the gate settings on symbols nobody has looked at.</span></div>';
+      }
+      html += '<div class="note"><span class="nc">!</span><span>The risk gates were recalibrated after a diagnosis showed the originals were effectively unsatisfiable (a ±22 band sits at the distribution\'s own 90th percentile, and a 2R clear-air demand against a 0.88R median room rejected 72% of pairs alone). That diagnosis ran on the <b>fit</b> symbols, so this held-out column is a clean test of the <b>weights</b> but not of the <b>gates</b>.</span></div>';
       html += '</div>';
     }
 
@@ -658,6 +820,7 @@
     }
     html += '</div>';
     el.innerHTML = html;
+    applyCollapse();
   }
 
   /* ------------------------------------------------------------ backtest */
@@ -705,12 +868,13 @@
     }
     html += '</div>';
     el.innerHTML = html;
+    applyCollapse();
 
     var runBtn = $('btRun');
     if (runBtn) runBtn.addEventListener('click', runBacktest);
     var bp = $('btProfile');
     if (bp) bp.addEventListener('change', function () { S.profile = bp.value; LS.set('profile', S.profile); renderProfileToggle(); reanalyze(); });
-    if (S.backtest && S.backtest.ok) {
+    if (S.backtest && S.backtest.ok && !isCardCollapsed('btCard')) {
       C.drawEquity($('btEquity'), S.backtest.stats.equityCurve);
     }
   }
@@ -767,6 +931,7 @@
     }
     html += '</div>';
     el.innerHTML = html;
+    applyCollapse();
 
     $('wlToggle').addEventListener('click', function () {
       var i = S.watchlist.indexOf(S.symbol);
@@ -840,6 +1005,16 @@
         return '<button data-p="' + k + '" class="' + (k === S.profile ? 'active' : '') + '" title="' + esc(E.PROFILE_LABELS[k] || k) + '">' + esc(k) + '</button>';
       }).join('') +
       '</div></div>' +
+      '<div class="field"><label>Risk gates</label><div class="seg" id="strictSeg">' +
+      Object.keys(E.STRICTNESS).map(function (k) {
+        var t = E.STRICTNESS[k];
+        return '<button data-s="' + k + '" class="' + (k === S.strictness ? 'active' : '') + '" title="composite ±' + t.minComposite + ', agreement ' + Math.round(t.minAgreement * 100) + '%, room ' + t.minAttainableR + 'R">' + esc(k) + '</button>';
+      }).join('') +
+      '</div></div>' +
+      '<div class="field collapse-controls"><label>Layout</label><div style="display:flex;gap:6px">' +
+      '<button class="ghost" id="collapseAll" title="Fold every panel">Collapse all</button>' +
+      '<button class="ghost" id="expandAll" title="Unfold every panel">Expand all</button>' +
+      '</div></div>' +
       '<button class="primary" id="reloadBtn">Refresh</button>';
 
     var input = $('pairInput'), list = $('comboList');
@@ -887,6 +1062,16 @@
       renderPicker(); reanalyze(); renderAll();
     });
     $('reloadBtn').addEventListener('click', function () { load(S.symbol); });
+    $('collapseAll').addEventListener('click', function () { setAllCollapsed(true); });
+    $('expandAll').addEventListener('click', function () { setAllCollapsed(false); });
+    var strictSeg = $('strictSeg');
+    if (strictSeg) strictSeg.addEventListener('click', function (ev) {
+      var b = ev.target.closest('button[data-s]');
+      if (!b) return;
+      S.strictness = b.getAttribute('data-s');
+      LS.set('strictness', S.strictness);
+      renderPicker(); reanalyze(); renderAll();
+    });
   }
 
   function renderProfileToggle() { renderPicker(); }
@@ -943,6 +1128,7 @@
   /* ----------------------------------------------------------------- boot */
 
   function boot() {
+    bindCollapse();
     renderStatus('Loading pair universe…', '');
     D.pairs().then(function (list) {
       S.pairs = list;
