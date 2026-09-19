@@ -24,6 +24,7 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "verify": "node scripts/verify_site.js",
+    "verify:live": "node scripts/verify_live.js",
     "fixtures": "node scripts/record_fixtures.mjs",
     "calibrate": "node scripts/calibrate.mjs",
     "ic": "node scripts/ic_study.mjs",

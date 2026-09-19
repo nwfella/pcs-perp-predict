@@ -146,6 +146,7 @@ scripts/ic_study.mjs        information coefficient per factor -> data/ic_study.
 scripts/oos_test.mjs        held-out symbol test -> data/oos_test.json
 scripts/record_fixtures.mjs capture trimmed live API responses for the test gate
 scripts/verify_site.js      jsdom gate: 91 assertions over the built page
+scripts/verify_live.js      post-deploy gate: boots the DEPLOYED url against the live API
 data/                       baked validation results (inlined into index.html at build)
 tests/fixtures.json         recorded API responses used by the gate
 ```
@@ -155,6 +156,7 @@ tests/fixtures.json         recorded API responses used by the gate
 ```bash
 node scripts/build.mjs          # src/ -> index.html  (open index.html directly)
 node scripts/verify_site.js     # 91-assertion gate over the built page (needs jsdom)
+node scripts/verify_live.js     # boots the deployed URL against the live exchange
 node scripts/calibrate.mjs      # exit-policy + gated-strategy measurement
 node scripts/ic_study.mjs       # factor information coefficients   (BASE=4h for the long window)
 node scripts/oos_test.mjs       # held-out symbol validation
@@ -162,6 +164,45 @@ node scripts/oos_test.mjs       # held-out symbol validation
 
 There is no build step to *run* the page — `index.html` is self-contained and
 opens over `file://`.
+
+## Deployment
+
+GitHub Pages serves `master` at the repository root:
+
+<https://nwfella.github.io/pcs-perp-predict/>
+
+`scripts/verify_live.js` closes the loop after every deploy. It fetches the
+deployed page, checks the served bytes are **sha256-identical to the local build**
+(so what is on Pages is exactly what passed the local gate), then boots it in
+jsdom with real network access and asserts a live connection, the live pair
+universe, a rendered verdict, evidence rows, heatmap, plan, and canvas output.
+Last run: 20/20 assertions, served sha `6600cd607f0f` matching local, 581
+perpetuals fetched, 23 factor rows, 260 candles drawn, no script errors.
+
+If it reports a blank page with no script errors, check for a security-proxy
+interstitial: the gate explicitly flags a response body that has been replaced by
+an `iframe-container` / `threatprotection` redirect, which is a network appliance
+rewriting the page rather than a fault in the app.
+
+### CORS
+
+The browser calls the exchange directly, so the preflight has to pass. Verified
+from the Pages origin:
+
+```
+$ curl -i -X OPTIONS 'https://fapi.asterdex.com/fapi/v1/klines?symbol=BTCUSDT&interval=1h&limit=1' \
+    -H 'Origin: https://nwfella.github.io' -H 'Access-Control-Request-Method: GET'
+HTTP/1.1 204 No Content
+Access-Control-Allow-Origin: *
+Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS
+
+$ curl -i 'https://fapi.asterdex.com/fapi/v1/ticker/24hr?symbol=BTCUSDT' \
+    -H 'Origin: https://nwfella.github.io'
+HTTP/1.1 200 OK
+Access-Control-Allow-Origin: *
+```
+
+No proxy, no worker, no key.
 
 ## Method notes and limitations
 
@@ -195,6 +236,8 @@ Any chain, any token:
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+MIT — see [LICENSE](LICENSE). Additional notes on market data, the absence of any
+financial advice, and the absence of any accuracy warranty are in
+[NOTICE.md](NOTICE.md).
 
 Market data © Aster / PancakeSwap. This project is unaffiliated with both.
