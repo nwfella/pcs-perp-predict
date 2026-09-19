@@ -1,0 +1,36 @@
+{
+  "name": "pcs-perp-predict",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Multi-faceted technical and derivatives analysis for every perpetual on PancakeSwap Perps — verdict, ATR stop, scaled targets, position sizing, and a walk-forward backtest with its own measured expectancy on display.",
+  "license": "MIT",
+  "author": "nwfella",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nwfella/pcs-perp-predict.git"
+  },
+  "homepage": "https://nwfella.github.io/pcs-perp-predict/",
+  "keywords": [
+    "pancakeswap",
+    "aster",
+    "perpetuals",
+    "technical-analysis",
+    "trading",
+    "backtest",
+    "defi",
+    "bsc"
+  ],
+  "type": "commonjs",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "verify": "node scripts/verify_site.js",
+    "fixtures": "node scripts/record_fixtures.mjs",
+    "calibrate": "node scripts/calibrate.mjs",
+    "ic": "node scripts/ic_study.mjs",
+    "oos": "node scripts/oos_test.mjs",
+    "test": "node scripts/build.mjs && node scripts/verify_site.js"
+  },
+  "devDependencies": {
+    "jsdom": "^30.1.0"
+  }
+}

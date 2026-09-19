@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PCS-Perp-Predict — PancakeSwap Perps signal &amp; risk engine</title>
+<meta name="description" content="Multi-faceted technical and derivatives analysis for every perpetual on PancakeSwap Perps. Long/short verdicts with ATR-based stops, scaled targets, position sizing, and a walk-forward backtest of the exact same engine.">
+<meta name="color-scheme" content="dark">
+<meta property="og:title" content="PCS-Perp-Predict">
+<meta property="og:description" content="22-factor analysis engine for PancakeSwap Perps — with its own measured expectancy on display.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#129374;</text></svg>">
+<style>
+/*__STYLES__*/
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="top">
+    <div class="brand">
+      <div class="logo">PP</div>
+      <div>
+        <h1>PCS-Perp-Predict</h1>
+        <p class="sub">Perpetual futures analysis &amp; risk engine for <a href="https://pancakeswap.finance/perps" target="_blank" rel="noopener">PancakeSwap Perps</a> · market data from Aster fapi</p>
+      </div>
+    </div>
+    <div class="status-bar">
+      <span class="status-dot" id="statusDot"></span>
+      <span id="statusText">Booting…</span>
+      <span id="lastUpdate" style="color:var(--text3)"></span>
+    </div>
+  </header>
+
+  <div class="controls" id="picker"></div>
+
+  <div class="grid">
+    <div class="col-2" id="verdictCard"></div>
+
+    <div id="chartCard"></div>
+    <div id="heatCard"></div>
+
+    <div id="planCard"></div>
+    <div id="sizeCard"></div>
+
+    <div id="derivCard"></div>
+    <div id="factorCard"></div>
+
+    <div class="col-2" id="btCard"></div>
+    <div class="col-2" id="validCard"></div>
+
+    <div class="col-2" id="watchCard"></div>
+  </div>
+
+  <div class="donate">
+    <span style="font-size:20px">💜</span>
+    <div>
+      <div class="dt">Support this project</div>
+      <div class="ds">Any chain, any token — EVM address below.</div>
+    </div>
+    <code id="donateAddr">0xe09e6c33b444d246F1005BdCd404ff33Cb709EcA</code>
+    <button class="ghost" id="copyAddr">Copy address</button>
+  </div>
+
+  <footer class="bottom">
+    <span>PCS-Perp-Predict · single-file, zero dependencies</span>
+    <span>Market data: <span class="mono">fapi.asterdex.com</span> (keyless, CORS-open)</span>
+    <span>Engine v<span id="engineVer">—</span></span>
+    <span>MIT licensed</span>
+  </footer>
+
+  <div class="disclaimer">
+    <b>Not financial advice.</b> This tool performs a transparent, rule-based technical summary of public market data. It does
+    not predict prices and has not demonstrated a statistically significant edge — the validation panel above shows exactly
+    what it measured, including its losses. Perpetual futures with leverage can lose your entire margin and more. Nothing here
+    is a recommendation to trade, and open interest, funding and order-book readings only describe the state of the venue at the
+    instant they were fetched. Verify every level yourself before risking capital.
+  </div>
+
+</div>
+
+<script>
+/*__VALIDATION__*/
+</script>
+<script>
+/*__INDICATORS__*/
+</script>
+<script>
+/*__ENGINE__*/
+</script>
+<script>
+/*__DATA__*/
+</script>
+<script>
+/*__BACKTEST__*/
+</script>
+<script>
+/*__CHART__*/
+</script>
+<script>
+/*__APP__*/
+</script>
+<script>
+(function () {
+  var btn = document.getElementById('copyAddr');
+  if (!btn) return;
+  btn.addEventListener('click', function () {
+    var addr = document.getElementById('donateAddr').textContent.trim();
+    var done = function () { btn.textContent = 'Copied ✓'; setTimeout(function () { btn.textContent = 'Copy address'; }, 1600); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(addr).then(done, function () { fallback(addr, done); });
+    } else { fallback(addr, done); }
+  });
+  function fallback(text, cb) {
+    var ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand('copy'); cb(); } catch (e) {}
+    document.body.removeChild(ta);
+  }
+  document.getElementById('engineVer').textContent = (window.PPEngine && window.PPEngine.VERSION) || '—';
+})();
+</script>
+</body>
+</html>
